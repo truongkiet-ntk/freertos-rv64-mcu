@@ -1,0 +1,28 @@
+# Editor / IDE
+.vscode/
+.idea/
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Simulation / waveform
+*.vcd
+*.fst
+*.wlf
+
+# Simulation generated files
+sim_build/
+build/
+work/
+
+# Logs
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
