@@ -1,0 +1,431 @@
+`timescale 1ns/1ps
+`include "modules/headers/trap.vh"
+
+module CSRFile_tb;
+    reg         clk;
+    reg         reset;
+    reg         trapped;
+    reg         mret_executed;
+    reg         csr_write_enable;
+    reg  [11:0] csr_read_address;
+    reg  [11:0] csr_write_address;
+    reg  [63:0] csr_write_data;
+    reg instruction_retired;
+    reg timer_interrupt_pending;
+    reg external_interrupt_pending;
+    reg trapped_latch;
+    reg [3:0] trap_status;
+    reg pth_read;
+
+    wire [63:0] csr_read_out;
+    wire        csr_ready;
+
+    wire        mstatus_mie;
+    wire        mie_mtie;
+    wire        mie_meie;
+    integer errors;
+
+    CSRFile csr_file (
+        .clk(clk),
+        .clk_enable(1'b1), // Always enabled for testing
+        .reset(reset),
+        .trapped(trapped),
+        .trapped_latch(trapped_latch),
+        .mret_executed(mret_executed),
+        .csr_write_enable(csr_write_enable),
+        .csr_read_address(csr_read_address),
+        .csr_write_address(csr_write_address),
+        .csr_write_data(csr_write_data),
+        .instruction_retired(instruction_retired),
+        .valid_csr_address(1'b1), // Assume all addresses are valid for testing
+        .timer_interrupt_pending(timer_interrupt_pending),
+        .external_interrupt_pending(external_interrupt_pending),
+        .pth_read(pth_read),
+        .trap_status(trap_status),
+
+        .csr_read_out(csr_read_out),
+        .csr_ready(csr_ready), 
+
+        .mstatus_mie(mstatus_mie),
+        .mie_mtie(mie_mtie),
+        .mie_meie(mie_meie)
+    );
+
+    // Generate clock signal, 10ns.
+    initial clk = 0;
+    always #5 clk = ~clk;
+
+    initial begin
+        $dumpfile("./testbenches/results/waveforms/CSR_File.vcd");
+        $dumpvars(0, CSRFile_tb);
+    end
+
+    initial begin
+        $display("==================== CSR File Test START ====================");
+        errors = 0;
+        
+        // Reset to DEFAULT value, Initialize signals.
+        reset = 1;
+        trapped = 0;
+        mret_executed = 0;
+        timer_interrupt_pending = 0;
+        external_interrupt_pending = 0;
+        trapped_latch = 0;
+        trap_status = 4'b0000;
+        pth_read = 0;
+        csr_write_enable = 0;
+        csr_read_address = 12'h000;
+        csr_write_address = 12'h000;
+        csr_write_data = 64'h0;
+        instruction_retired = 0;
+        #10;
+        reset = 0;
+        #10;
+        
+        // Test 1: Read-only CSRs read.
+        csr_read_address = 12'hF11; #10; 
+        $display("mvendorid = %h (expected 52564B43)", csr_read_out);
+        
+        csr_read_address = 12'hF12; #10; 
+        instruction_retired = 1'b1; #10;
+        instruction_retired = 1'b0;
+        $display("marchid = %h (expected 34365335)", csr_read_out);
+        
+        csr_read_address = 12'hF13; #10;
+        $display("mimpid = %h (expected 34364931)", csr_read_out);
+
+        csr_read_address = 12'hF14; #10; 
+        $display("mhartid = %h (expected 524B4330)", csr_read_out);
+
+        csr_read_address = 12'h300; #10; 
+        $display("mstatus = %h (expected 00001800)", csr_read_out);
+
+        csr_read_address = 12'h301; #10; 
+        $display("misa = %h (expected 40000100)", csr_read_out);
+        
+        // Test 2: MRW CSRs' reset value check
+        csr_read_address = 12'h305; #10; 
+        $display("mtvec (reset) = %h (expected 00001000)", csr_read_out);
+        csr_read_address = 12'h341; #10; 
+        $display("mepc  (reset) = %h (expected 00000000)", csr_read_out);
+        csr_read_address = 12'h342; #10; 
+        $display("mcause(reset) = %h (expected 00000000)", csr_read_out);
+
+        // Test 3: csrrw; mtvec
+        csr_read_address = 12'h305; #10; 
+        $display("mtvec = %h (expected 00001000)", csr_read_out);
+
+        csr_write_address = 12'h305;
+        csr_write_data = 32'h00003000;
+        csr_write_enable = 1;
+        #10;
+
+        csr_write_enable = 0;
+        #10;
+
+        csr_read_address = 12'h305; #10; 
+        $display("mtvec = %h (expected 00003000)", csr_read_out);
+        
+        // Test 4: csrrw; mepc
+        csr_read_address = 12'h341; #10;
+        $display("mepc = %h (expected 00000000)", csr_read_out);
+
+        csr_write_address = 12'h341;
+        csr_write_data = 32'h00004000;
+        csr_write_enable = 1;
+        #10;
+
+        csr_write_enable = 0;
+        #10;
+
+        csr_read_address = 12'h341; #10; 
+        $display("mepc = %h (expected 00004000)", csr_read_out);
+        
+        // Test 5: csrrw; mcause
+        csr_read_address = 12'h342; #10; 
+        $display("mcause = %h (expected 00000000)", csr_read_out);
+
+        csr_write_address = 12'h342;
+        csr_write_data = 32'h00000004;
+        csr_write_enable = 1;
+        #10;
+
+        csr_write_enable = 0;
+        #10;
+
+        csr_read_address = 12'h342;
+        #10;
+
+        $display("mcause = %h (expected 00000004)", csr_read_out);
+        
+        // Test 6: csrrw; Read-only's write ignore test.
+        csr_read_address = 12'hF11; #10; 
+        $display("Read-only test : mvendorid = %h (expected 52564B43)", csr_read_out);
+
+        csr_write_address = 12'hF11;
+        csr_write_data = 32'h00003000;
+        csr_write_enable = 1;
+        #10;
+
+        csr_write_enable = 0;
+        #10;
+
+        csr_read_address = 12'hF11;
+        #10;
+
+        $display("Write ignored : mvendorid = %h (expected 52564B43)", csr_read_out);
+        
+        // Test 7: mcycle/minstret auto-increment check (read-only counters)
+        csr_read_address = 12'hB00; #10;
+        $display("mcycle (lower 32-bit) = %h (auto-incremented, not 0)", csr_read_out);
+        
+        csr_read_address = 12'hB80; #10;
+        $display("mcycleh (upper 32-bit) = %h (should be 0, no overflow yet)", csr_read_out);
+        
+        csr_read_address = 12'hB02; #10;
+        $display("minstret (lower 32-bit) = %h (should be 1, one instruction retired in Test 1)", csr_read_out);
+        
+        csr_read_address = 12'hB82; #10;
+        $display("minstreth (upper 32-bit) = %h (should be 0, no overflow yet)", csr_read_out);
+
+        // Test 8: Read-only test for mcycle - write should be ignored
+        csr_read_address = 12'hB00; #10;
+        $display("mcycle (before write attempt) = %h", csr_read_out);
+
+        csr_write_address = 12'hB00;
+        csr_write_data = 32'h12345678;
+        csr_write_enable = 1;
+        #10;
+
+        csr_write_enable = 0;
+        #10;
+
+        csr_read_address = 12'hB00; #10;
+        $display("mcycle (after write attempt) = %h (write should be ignored, auto-incremented)", csr_read_out);
+        
+        // Test 9: Read-only test for mcycleh - write should be ignored
+        csr_read_address = 12'hB80; #10;
+        $display("mcycleh (before write attempt) = %h", csr_read_out);
+
+        csr_write_address = 12'hB80;
+        csr_write_data = 32'hABCDEF00;
+        csr_write_enable = 1;
+        #10;
+
+        csr_write_enable = 0;
+        #10;
+
+        csr_read_address = 12'hB80; #10;
+        $display("mcycleh (after write attempt) = %h (write should be ignored, should remain 0)", csr_read_out);
+        
+        // Test 10: Read-only test for minstret - write should be ignored
+        csr_read_address = 12'hB02; #10;
+        $display("minstret (before write attempt) = %h", csr_read_out);
+
+        csr_write_address = 12'hB02;
+        csr_write_data = 32'hDEADBEEF;
+        csr_write_enable = 1;
+        #10;
+
+        csr_write_enable = 0;
+        #10;
+
+        csr_read_address = 12'hB02; #10;
+        $display("minstret (after write attempt) = %h (write should be ignored, should remain 1)", csr_read_out);
+        
+        // Test 11: Read-only test for minstreth - write should be ignored
+        csr_read_address = 12'hB82; #10;
+        $display("minstreth (before write attempt) = %h", csr_read_out);
+
+        csr_write_address = 12'hB82;
+        csr_write_data = 32'hCAFEBABE;
+        csr_write_enable = 1;
+        #10;
+
+        csr_write_enable = 0;
+        #10;
+
+        csr_read_address = 12'hB82; #10;
+        $display("minstreth (after write attempt) = %h (write should be ignored, should remain 0)", csr_read_out);
+        
+        // Test 12: mcycle auto-increment verification
+        $display("\n=== Auto-increment verification ===");
+        csr_read_address = 12'hB00; 
+        #10;
+        $display("mcycle at T0 = %h", csr_read_out);
+        #20; // Wait 2 cycles
+        csr_read_address = 12'hB00; 
+        #10;
+        $display("mcycle at T0+2 = %h (should be +2 from previous)", csr_read_out);
+        
+        // Test 13: minstret increment with instruction_retired
+        $display("\n=== instruction_retired test ===");
+        csr_read_address = 12'hB02;
+        #10;
+        $display("minstret before retired = %h", csr_read_out);
+        
+        instruction_retired = 1;
+        #10;
+        instruction_retired = 0;
+        csr_read_address = 12'hB02;
+        #10;
+        $display("minstret after 1 retired = %h (should be +1)", csr_read_out);
+        
+        instruction_retired = 1;
+        #10;
+        instruction_retired = 1;
+        #10;
+        instruction_retired = 0;
+        csr_read_address = 12'hB02;
+        #10;
+        $display("minstret after 2 more retired = %h (should be +2)", csr_read_out);
+
+        csr_read_address = 12'h344; #10;
+        $display("mip = %b (MTIP should be 0)", csr_read_out);
+        timer_interrupt_pending = 1;
+        #20;
+        csr_read_address = 12'h344; #10;
+        $display("mip = %b (MTIP should be 1)", csr_read_out);
+
+        // Test 14: Trap & mret Verification
+        $display("\n=== Test 14: Trap & mret Verification ===");
+
+        csr_write_address = 12'h300; 
+        csr_write_data = 32'h00000008;
+        csr_write_enable = 1; #10;
+        csr_write_enable = 0; #10;
+        
+        csr_read_address = 12'h300; #10;
+        $display("Before Trap: mstatus = %h (Expected MIE=1, MPIE=0 -> 00001808)", csr_read_out);
+
+        trapped = 1; #10;
+        trapped = 0; #10;
+        
+        csr_read_address = 12'h300; #10;
+        $display("After Trap:  mstatus = %h (Expected MIE=0, MPIE=1 -> 00001880)", csr_read_out);
+
+        mret_executed = 1; #10;
+        mret_executed = 0; #10;
+        
+        csr_read_address = 12'h300; #10;
+        $display("After mret:  mstatus = %h (Expected MIE=1, MPIE=1 -> 00001888)", csr_read_out);
+
+        //-----------------------
+        $display("\n=== Test 15: mscratch R/W Test ===");
+        csr_read_address = 12'h340; #10; 
+        $display("mscratch (reset) = %h (expected 00000000)", csr_read_out);
+        
+        csr_write_address = 12'h340;
+        csr_write_data = 32'hDEADBEEF; 
+        csr_write_enable = 1; #10;
+        csr_write_enable = 0; #10;
+        
+        csr_read_address = 12'h340; #10;
+        $display("mscratch (after write) = %h (expected DEADBEEF)", csr_read_out);
+
+        $display("\n=== Test 16: mie (12'h304) and Output Wires Test ===");
+        csr_write_address = 12'h304; 
+        csr_write_data = 32'h00000080; 
+        csr_write_enable = 1; #10;
+        csr_write_enable = 0; #10;
+
+        csr_read_address = 12'h304; #10;
+        $display("mie = %h (expected 00000080)", csr_read_out);
+        $display("mie_mtie wire output = %b (expected 1)", mie_mtie);
+        $display("mstatus_mie wire output = %b (current MIE state)", mstatus_mie);
+
+        //---------------
+
+
+
+        //-----------------------
+        $display("\n=== Test 17: External interrupt CSR state ===");
+        external_interrupt_pending = 1'b1;
+        csr_read_address = 12'h344;
+        #10;
+        if (csr_read_out !== 64'h0000_0000_0000_0880) begin
+            $display("[FAIL] mip.MEIP/MTIP expected 0000000000000880, got %h", csr_read_out);
+            errors = errors + 1;
+        end else begin
+            $display("[PASS] mip.MEIP and mip.MTIP pending = %h", csr_read_out);
+        end
+
+        csr_write_address = 12'h304;
+        csr_write_data = 64'h0000_0000_0000_0880;
+        csr_write_enable = 1'b1;
+        #10;
+        csr_write_enable = 1'b0;
+        #10;
+        csr_read_address = 12'h304;
+        #10;
+        if (csr_read_out !== 64'h0000_0000_0000_0880 ||
+            mie_meie !== 1'b1 || mie_mtie !== 1'b1) begin
+            $display("[FAIL] mie.MEIE/MTIE expected both enabled, mie=%h", csr_read_out);
+            errors = errors + 1;
+        end else begin
+            $display("[PASS] mie.MEIE and mie.MTIE enabled");
+        end
+
+        csr_write_address = 12'h300;
+        csr_write_data = 64'h0000_0000_0000_0008;
+        csr_write_enable = 1'b1;
+        #10;
+        csr_write_enable = 1'b0;
+        #10;
+        if (mstatus_mie !== 1'b1) begin
+            $display("[FAIL] mstatus.MIE should be enabled before trap");
+            errors = errors + 1;
+        end
+
+        trap_status = `EXTERNAL_INTERRUPT_IRQ;
+        trapped_latch = 1'b1;
+        #10;
+        trapped_latch = 1'b0;
+        trap_status = `TRAP_NONE;
+        csr_read_address = 12'h300;
+        #10;
+        if (mstatus_mie !== 1'b0 || csr_read_out[7] !== 1'b1) begin
+            $display("[FAIL] external trap entry must save MIE to MPIE and clear MIE: mstatus=%h", csr_read_out);
+            errors = errors + 1;
+        end else begin
+            $display("[PASS] external trap entry updates MIE/MPIE: mstatus=%h", csr_read_out);
+        end
+
+        mret_executed = 1'b1;
+        #10;
+        mret_executed = 1'b0;
+        #1;
+        if (mstatus_mie !== 1'b1) begin
+            $display("[FAIL] mret must restore MIE from MPIE");
+            errors = errors + 1;
+        end else begin
+            $display("[PASS] mret restores MIE");
+        end
+
+        // Final values
+        $display("\n=== Final Counter Values ===");
+        csr_read_address = 12'hB00; #10;
+        $display("Final mcycle[31:0] = %h", csr_read_out);
+        
+        csr_read_address = 12'hB80; #10;
+        $display("Final mcycle[63:32] = %h", csr_read_out);
+        $display("Final Full mcycle = 0x%h_%h", csr_file.mcycle[63:32], csr_file.mcycle[31:0]);
+        
+        csr_read_address = 12'hB02; #10;
+        $display("Final minstret[31:0] = %h", csr_read_out);
+        
+        csr_read_address = 12'hB82; #10;
+        $display("Final minstret[63:32] = %h", csr_read_out);
+        $display("Final Full minstret = 0x%h_%h", csr_file.minstret[63:32], csr_file.minstret[31:0]);
+        
+        if (errors == 0)
+            $display("\n====================  CSR FILE TESTS PASSED  ====================");
+        else begin
+            $display("\n====================  CSR FILE TESTS FAILED: %0d  ====================", errors);
+            $fatal(1, "CSRFile test failed");
+        end
+
+        $finish;
+    end
+    
+endmodule
